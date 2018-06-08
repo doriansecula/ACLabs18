@@ -1,0 +1,277 @@
+#include <MovingAverageFilter.h>
+
+#include <boarddefs.h>
+#include <IRremote.h>
+#include <IRremoteInt.h>
+#include <ir_Lego_PF_BitStreamEncoder.h>
+
+#include "Types.h"
+#include "Motors.h"
+#include "Ultrasonic.h"
+
+#define MAX_SPEED 150
+#define RED 41
+#define GREEN 39 
+#define BLUE 43
+#define K 10
+#define DIST_WALL 8
+
+MovingAverageFilter Fwd(100);
+MovingAverageFilter L(100);
+MovingAverageFilter R(100);
+
+uint32 forward, left, right;
+
+uint8 right_dist,left_dist,front_dist;
+
+uint8 state = 0;
+uint8 find_robot=0;
+uint8 alg_used=0;//0 0->right, 1->left
+uint32 timer=millis();
+uint32 speed_val_right;
+uint32 speed_val_left;
+
+int counter = 0, previousState = 0;
+
+IRrecv irrecv(2);
+IRsend irsend;
+decode_results results;
+
+NewPing sonar1(trig_1, echo_1, Max_Dist); 
+NewPing sonar2(trig_2, echo_2, Max_Dist); 
+NewPing sonar3(trig_3, echo_3, Max_Dist);
+
+uint16 value;
+
+
+
+void setup() {
+    pinMode(43, OUTPUT);
+    irrecv.enableIRIn(); // Start the receiver
+    
+    pingTimer1 = millis() + pingSpeed; // Sensor 1 fires after 1 second (pingSpeed)
+    pingTimer2 = pingTimer1 + delay_ping; // Sensor 2 fires 35ms later
+    pingTimer3 = pingTimer2 + delay_ping;
+    
+    Serial.begin(9600);
+}
+
+/*
+uint8 filter(NewPing sonar, uint8 samples)
+{
+  uint32 data;
+
+  for(int i = 0; i < samples; i++)
+    data += sonar.ping_cm();
+
+  return data/samples;
+}
+
+*/
+sint8 opreste()
+{
+  sint8 res;
+  Serial.print("fata: ");
+  Serial.println(forward);
+  Serial.print("dreapta: ");
+  Serial.println(right);
+  Serial.print("stanga: ");
+  Serial.println(left);
+
+  if(forward <20  && left < 10 && right < 10)
+    {
+      res = 1;
+    }
+   else
+   {
+    res =  0; 
+   }
+
+    return res;
+}
+
+void go(uint8 volt1, uint8 volt2, sint8 directie)
+{
+  if(directie == 1)
+  {
+    analogWrite(MOTOR_Left_1, volt1);
+    analogWrite(MOTOR_Right_1, 0);
+
+    analogWrite(MOTOR_Left_2, volt2);
+    analogWrite(MOTOR_Right_2, 0);
+  }
+  else
+  {
+    analogWrite(MOTOR_Left_1, 0);
+    analogWrite(MOTOR_Right_1, volt1);
+
+    analogWrite(MOTOR_Left_2, 0);
+    analogWrite(MOTOR_Right_2, volt2);
+  } 
+}
+
+void seek()
+{
+  
+  
+  if(opreste()) //here we will have the 'go in reverse' code
+  //if(forward-old_forward>100)
+    go(0, 0, 1);
+  else
+    if(left < 20 && right < 20)
+      go(speed_val_left, speed_val_right, 1);
+    else
+      go(100, 100, 1);
+         
+}
+
+/*
+bool cond_fwd()
+{
+  return  ((forward>12 && right<10 && left <10) || (forward>12 && left>10 && right<10)); 
+}
+
+bool cond_right()
+{
+  return ( (forward<12 && left<8 && right >10) || (forward<10 && left>10 & right>10) || (forward>12 && right>10));
+}
+
+bool cond_left()
+{
+  return ((forward<12 && right <8 && left >10)) ;
+}
+*/
+
+void rotate_right() //state = 2 -> for turning right
+{
+  go(100, 40 , 1);
+
+  if(right < 10)
+    {
+      go(0, 0, 1);
+      state = 1; //go forward again
+    }
+  
+}
+void rotate_left()
+{
+  if(millis()- timer < 700)
+    {
+      go(0 , MAX_SPEED, 1);
+    }
+    else state = 1; //go forward again
+}
+
+void robot_move()
+{
+   
+  if(results.value == 4294967295 )
+    find_robot = 1;
+    
+  if(find_robot==0)
+  {
+    if(counter == 25)
+    {
+      if(previousState == 0)
+      {
+        digitalWrite(BLUE, 40);
+        previousState = 1;
+      }
+      else
+      {
+        digitalWrite(BLUE,LOW);
+        previousState = 0;
+      }
+      counter = 0;
+     }
+    
+    counter++;
+      switch(state)
+      {
+        case 0: //before start, wait 5 seconds
+        { 
+        //if(millis()-timer>5000) //wait 5 seconds
+          state=1;
+
+          break;
+        }
+    
+        case 1: // go forward
+        {  
+          if(right>20) 
+          {
+            timer = millis();
+            state = 2; //turn right
+          }
+          else
+            if(forward < 20)
+            {
+              if(left > 18)
+              {
+                timer=millis();
+                state=3; //turn left
+              }
+            }
+            else
+              seek();
+
+          break;
+        }
+    
+        case 2: // go right
+        {
+          rotate_right();
+          break;
+        }
+
+        case 3:
+        {
+          rotate_left();// go left
+          break;
+        }
+    
+      }
+   }
+   else //place the code for when robot is found
+   {
+     go(0, 0, 1);
+     digitalWrite(BLUE, 40);
+   }
+  
+}
+
+
+
+void loop() 
+{
+
+  right_dist = sonar2.ping_cm();
+  left_dist = sonar1.ping_cm();
+  front_dist = sonar3.ping_cm();
+
+  forward = Fwd.process(sonar3.ping_cm());
+  left=L.process(sonar1.ping_cm());
+  right=R.process(sonar2.ping_cm());
+
+  speed_val_right = 100 + K * (DIST_WALL - right);  
+  speed_val_left = 100 + K * (DIST_WALL - left);
+
+
+  robot_move();
+  
+  if ((irrecv.decode(&results)))
+   {
+     irrecv.resume();  
+     value = results.value;
+     Serial.println(results.value);
+   }
+
+  // irsend.sendSony(0xa90, 12); //send 0xa90 on infrared
+}
+
+/*
+   digitalWrite(43, HIGH);
+  delay(1000);
+  digitalWrite(43,LOW);
+  delay(1000);
+ */
